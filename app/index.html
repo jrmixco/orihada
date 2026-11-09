@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' data:; connect-src 'self' blob: data:">
+  <title>Orihada</title>
+  <link rel="stylesheet" href="vendor/pdfjs/pdf_viewer.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app" class="no-doc">
+    <!-- One tab per open document -->
+    <div id="tabbar" class="doc-only">
+      <div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Open documents"></div>
+    </div>
+
+    <!-- Top bar: navigation, zoom, primary actions -->
+    <header id="topbar">
+      <div class="tb-left">
+        <button class="icon-btn" id="btn-sidebar" data-icon="panel-left" title="Toggle sidebar (Ctrl+B)"></button>
+        <div class="brand"><span class="brand-mark"></span><span class="brand-name">Orihada</span></div>
+      </div>
+      <div class="tb-center doc-only">
+        <div class="seg">
+          <button class="icon-btn" id="btn-prev" data-icon="chevron-left" title="Previous page (←)"></button>
+          <div class="page-box">
+            <input id="page-input" type="text" inputmode="numeric" autocomplete="off" aria-label="Page number">
+            <span id="page-count">/ 0</span>
+          </div>
+          <button class="icon-btn" id="btn-next" data-icon="chevron-right" title="Next page (→)"></button>
+        </div>
+        <div class="seg">
+          <button class="icon-btn" id="btn-zoom-out" data-icon="minus" title="Zoom out (Ctrl+−)"></button>
+          <button class="zoom-btn" id="zoom-btn" title="Zoom options">100%</button>
+          <button class="icon-btn" id="btn-zoom-in" data-icon="plus" title="Zoom in (Ctrl+=)"></button>
+        </div>
+      </div>
+      <div class="tb-right">
+        <div class="search-box doc-only" id="search-box">
+          <span data-icon="search" data-size="16"></span>
+          <input id="find-input" type="text" placeholder="Search" autocomplete="off" aria-label="Search in document (Ctrl+F)" title="Search in document (Ctrl+F)">
+          <span id="find-count"></span>
+          <button class="icon-btn" id="find-prev" data-icon="chevron-up" data-size="16" title="Previous match (Shift+Enter)"></button>
+          <button class="icon-btn" id="find-next" data-icon="chevron-down" data-size="16" title="Next match (Enter)"></button>
+        </div>
+        <button class="icon-btn doc-only" id="btn-print" data-icon="printer" title="Print (Ctrl+P)"></button>
+        <button class="btn primary doc-only" id="btn-save"><span data-icon="save"></span><span>Save</span></button>
+        <button class="icon-btn" id="btn-open" data-icon="folder-open" title="Open PDF (Ctrl+O)"></button>
+        <button class="icon-btn" id="btn-more" data-icon="ellipsis" title="More"></button>
+      </div>
+    </header>
+
+    <!-- Tool bar: one row of labelled tools -->
+    <nav id="toolbar" class="doc-only" aria-label="Tools">
+      <div class="tools" id="tools"></div>
+      <div class="tools-right">
+        <button class="icon-btn" id="btn-undo" data-icon="undo-2" title="Undo (Ctrl+Z)"></button>
+        <button class="icon-btn" id="btn-redo" data-icon="redo-2" title="Redo (Ctrl+Y)"></button>
+      </div>
+    </nav>
+
+    <!-- Shown only for fillable forms -->
+    <div id="formbar" class="doc-only" hidden></div>
+
+    <div id="main">
+      <aside id="sidebar" class="doc-only">
+        <div class="side-tabs" role="tablist">
+          <button class="side-tab active" data-tab="outline" role="tab">Chapters</button>
+          <button class="side-tab" data-tab="pages" role="tab">Pages</button>
+          <button class="side-tab" data-tab="edits" role="tab">Edits<span class="badge" id="edits-count" hidden></span></button>
+        </div>
+        <div class="side-panel" id="panel-outline"></div>
+        <div class="side-panel" id="panel-pages" hidden></div>
+        <div class="side-panel" id="panel-edits" hidden></div>
+      </aside>
+
+      <section id="stage">
+        <!-- Floating options for the active tool or the selected edit (never shifts the page) -->
+        <div id="ctxbar" hidden></div>
+        <div id="viewerContainer" tabindex="0">
+          <div id="viewer" class="pdfViewer"></div>
+        </div>
+
+        <!-- Welcome / empty state -->
+        <div id="welcome">
+          <div class="welcome-card">
+            <div class="welcome-mark"></div>
+            <h1>Open a PDF</h1>
+            <p>Drop a file anywhere, or choose one. Everything stays on this computer.</p>
+            <button class="btn primary lg" id="btn-open-big"><span data-icon="folder-open"></span><span>Choose PDF…</span></button>
+            <div id="recent"></div>
+            <div class="tips">
+              <div class="tip"><span data-icon="signature" data-size="20"></span><b>Fill &amp; sign</b><span>Type on any form, sign in two clicks.</span></div>
+              <div class="tip"><span data-icon="files" data-size="20"></span><b>Fix pages</b><span>Rotate, reorder, merge, split. Free.</span></div>
+              <div class="tip"><span data-icon="shield-check" data-size="20"></span><b>Private</b><span>Nothing uploaded. No accounts.</span></div>
+            </div>
+            <p class="welcome-hint">Tip: press <kbd>Ctrl</kbd> <kbd>K</kbd> anytime to find any command.</p>
+          </div>
+        </div>
+        <div id="drop-hint" hidden><div>Drop PDF to open</div></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="menu-layer"></div>
+  <div id="modal-layer"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="print-container"></div>
+  <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+  <input type="file" id="image-input" accept="image/png,image/jpeg" hidden>
+
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

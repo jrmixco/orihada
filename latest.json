@@ -1,0 +1,20 @@
+{
+  "version": "1.1.0",
+  "date": "2026-11-09",
+  "page": "https://jrmixco.github.io/orihada/#download",
+  "notes": "First public release.",
+  "files": {
+    "setup": {
+      "name": "Orihada-Setup-1.1.0.exe",
+      "url": "https://github.com/jrmixco/orihada/releases/download/v1.1.0/Orihada-Setup-1.1.0.exe",
+      "size": 113789634,
+      "sha256": "4bd47e73b7745c8adaa994be1513d7b268627f1c27a9f6c323825e839a527eae"
+    },
+    "portable": {
+      "name": "Orihada-Portable-1.1.0.exe",
+      "url": "https://github.com/jrmixco/orihada/releases/download/v1.1.0/Orihada-Portable-1.1.0.exe",
+      "size": 102431728,
+      "sha256": "06cf7980b9b7961442266ec63bcb59f8a609e976bb27400c45db0190bc4d575f"
+    }
+  }
+}
