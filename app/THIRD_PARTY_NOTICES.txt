@@ -1,4 +1,4 @@
-Orihada 1.1.0 includes the open-source software listed below.
+Orihada 1.2.0 includes the open-source software listed below.
 The Windows app is built on Electron and Chromium; Chromium's own notices ship with the app in LICENSES.chromium.html.
 
 ========================================================================

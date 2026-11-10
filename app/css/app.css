@@ -601,3 +601,9 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible, .choice:ha
 
 /* native checkboxes, radios and sliders use the accent */
 input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--accent); }
+
+/* tab drag & drop: reorder, tear off into a new window, or move between windows */
+.doc-tabs { -webkit-app-region: no-drag; }
+.doc-tab.dragging { opacity: .4; }
+.tab-drop-marker { position: fixed; z-index: 150; width: 2px; background: var(--accent); border-radius: 2px; pointer-events: none; }
+body.dragging-tab #drop-hint { display: none !important; }

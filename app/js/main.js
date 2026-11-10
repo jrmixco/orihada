@@ -376,7 +376,9 @@ function renderTabs() {
     el.addEventListener("click", () => activateTab(tab));
     el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activateTab(tab); } });
+    el.addEventListener("contextmenu", (e) => { e.preventDefault(); tabMenu(tab, el); });
     close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(tab); });
+    wireTabDrag(el, tab);
     bar.append(el);
   }
   const add = h("button", { class: "icon-btn doc-tab-add", title: "Open another PDF (Ctrl+O)", "aria-label": "Open another PDF" }, iconEl("plus", 16));
@@ -440,6 +442,206 @@ function cycleTab(dir) {
   const i = tabs.indexOf(activeTab);
   activateTab(tabs[(i + dir + tabs.length) % tabs.length]);
 }
+
+// ---------- reorder tabs, and move them between windows ----------
+const canWindows = platform.isDesktop && !!window.folioNative.detachTab;
+
+/** Moves `tab` to position `to` (index in the list after removing it). */
+function moveTab(tab, to) {
+  const from = tabs.indexOf(tab);
+  if (from < 0) return;
+  tabs.splice(from, 1);
+  tabs.splice(Math.max(0, Math.min(to, tabs.length)), 0, tab);
+  renderTabs();
+}
+
+/** Everything needed to rebuild a tab elsewhere, including unsaved edits and undo history. */
+function tabPayload(tab) {
+  if (tab === activeTab) {
+    if (overlay.editingId) overlay.finishEditing(overlay.editingId);
+    tab.view = { page: viewer.currentPage, scale: viewer.scaleValue };
+  }
+  const st = tab.state, ov = tab.overlay;
+  return {
+    name: st.file.name, path: st.file.path || null, fp: st.fp, password: st.password,
+    versions: st.versions, version: ov.version, bytes: st.bytes,
+    form: st.formDirty ? formEntries(st.doc) : [],
+    items: ov.items, assets: [...ov.assets], undo: ov.undoStack, redo: ov.redoStack,
+    dirty: st.dirty, view: tab.view,
+  };
+}
+
+/** Removes a tab whose document now lives in another window (no save prompt; its draft stays). */
+async function releaseTab(tab) {
+  const i = tabs.indexOf(tab);
+  if (i < 0) return;
+  if (tab === activeTab) { clearTimeout(draftTimer); overlay.setTool("select"); overlay.select(null); }
+  tabs.splice(i, 1);
+  if (tab === activeTab) {
+    activeTab = null;
+    const next = tabs[i] || tabs[i - 1];
+    if (next) await activateTab(next);
+    else showWelcome();
+  }
+  tab.overlay.dispose();
+  tab.state.doc?.loadingTask.destroy();
+  renderTabs();
+  window.folioNative?.setDirty?.(tabs.some((t) => t.state.dirty));
+  // A window left with nothing open after its only tab moved away has no reason to stay.
+  if (!tabs.length && canWindows) window.folioNative.closeIfOtherWindows?.();
+}
+
+/** Opens `tab` in a new window (optionally at a screen point), then removes it here. */
+async function detachTab(tab, at = null) {
+  if (!canWindows) return;
+  const payload = tabPayload(tab);
+  const ok = await window.folioNative.detachTab(payload, at);
+  if (ok) await releaseTab(tab);
+}
+
+async function sendTabTo(tab, winId) {
+  const ok = await window.folioNative.sendTab(winId, tabPayload(tab));
+  if (ok) await releaseTab(tab);
+}
+
+/** Builds a tab from a payload sent by another window. */
+async function openTransfer(p, index = tabs.length) {
+  busy = true;
+  try {
+    const versions = (p.versions || [p.bytes]).map((b) => new Uint8Array(b));
+    const bytes = new Uint8Array(p.bytes);
+    const doc = await viewer.load(bytes, { password: p.password });
+    for (const [key, value] of p.form || []) doc.annotationStorage.setValue(key, value);
+    const st = newState();
+    Object.assign(st, {
+      doc, fp: p.fp, bytes, password: p.password, versions, formDirty: !!p.form?.length,
+      file: { name: p.name, path: p.path || undefined },
+    });
+    const tab = { id: Math.random().toString(36).slice(2), state: st, overlay: makeOverlay(), view: p.view || null };
+    tabs.splice(Math.max(0, Math.min(index, tabs.length)), 0, tab);
+    await activateTab(tab);
+    overlay.load(p.items || [], p.assets || []);
+    overlay.version = p.version || 0;
+    overlay.undoStack = p.undo || [];
+    overlay.redoStack = p.redo || [];
+    overlay.lastSnap = overlay.snapshot();
+    scheduleEditsRefresh();
+    setDirty(!!p.dirty);
+    updateUndo();
+    renderTools();
+    selectTab(sidebar.hasOutline ? "outline" : "pages");
+  } catch (e) {
+    console.error(e);
+    toast(`Couldn't move “${p.name}”: ${e.message || e}`, { timeout: 6000 });
+  } finally {
+    busy = false;
+  }
+}
+
+async function tabMenu(tab, anchor) {
+  const i = tabs.indexOf(tab);
+  const others = canWindows ? await window.folioNative.listWindows() : [];
+  openMenu(anchor, [
+    { label: "Move left", icon: "arrow-left", kbd: "Ctrl+Shift+PgUp", disabled: i === 0, onClick: () => moveTab(tab, i - 1) },
+    { label: "Move right", icon: "arrow-right", kbd: "Ctrl+Shift+PgDn", disabled: i === tabs.length - 1, onClick: () => moveTab(tab, i + 1) },
+    ...(canWindows ? [
+      "sep",
+      { label: "Open in new window", icon: "app-window", disabled: tabs.length < 2, onClick: () => detachTab(tab) },
+      ...others.map((w) => ({ label: `Move to window: ${w.title}`, icon: "square-arrow-out-up-right", onClick: () => sendTabTo(tab, w.id) })),
+    ] : []),
+    "sep",
+    { label: "Close", icon: "x", kbd: "Ctrl+W", onClick: () => closeTab(tab) },
+    { label: "Close other tabs", icon: "copy-x", disabled: tabs.length < 2, onClick: async () => { for (const t of tabs.filter((t) => t !== tab)) if (!(await closeTab(t))) return; } },
+  ], { align: "left" });
+}
+
+// Drag a tab to reorder it, drop it on another window's tab row, or drag it out to open a new window.
+const TAB_MIME = "application/x-orihada-tab";
+let dragTab = null;
+let dropMarker = null;
+
+function dropIndexAt(x) {
+  const els = $$("#doc-tabs .doc-tab");
+  for (let i = 0; i < els.length; i++) {
+    const r = els[i].getBoundingClientRect();
+    if (x < r.left + r.width / 2) return { index: i, x: r.left };
+  }
+  const last = els.at(-1)?.getBoundingClientRect();
+  return { index: els.length, x: last ? last.right : $("#doc-tabs").getBoundingClientRect().left };
+}
+
+function showDropMarker(x) {
+  if (!dropMarker) { dropMarker = h("div", { class: "tab-drop-marker" }); document.body.append(dropMarker); }
+  const r = $("#doc-tabs").getBoundingClientRect();
+  Object.assign(dropMarker.style, { left: `${x - 1}px`, top: `${r.top + 6}px`, height: `${r.height - 8}px` });
+}
+function hideDropMarker() { dropMarker?.remove(); dropMarker = null; }
+
+function wireTabDrag(el, tab) {
+  el.draggable = true;
+  el.addEventListener("dragstart", (e) => {
+    dragTab = tab;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(TAB_MIME, JSON.stringify({ win: window.folioNative?.windowId ?? null, tab: tab.id }));
+    e.dataTransfer.setData("text/plain", tab.state.file?.name || "");
+    document.body.classList.add("dragging-tab");
+    requestAnimationFrame(() => el.classList.add("dragging"));
+  });
+  el.addEventListener("dragend", (e) => {
+    document.body.classList.remove("dragging-tab");
+    el.classList.remove("dragging");
+    hideDropMarker();
+    const t = dragTab;
+    dragTab = null;
+    if (!t || !tabs.includes(t) || !canWindows || tabs.length < 2) return;
+    // Dropped outside every window: tear the tab off into a window of its own, where it was let go.
+    const outside = e.screenX < window.screenX || e.screenX > window.screenX + window.outerWidth
+      || e.screenY < window.screenY || e.screenY > window.screenY + window.outerHeight;
+    if (e.dataTransfer.dropEffect === "none" && outside) detachTab(t, { x: e.screenX, y: e.screenY });
+  });
+}
+
+const tabRow = $("#doc-tabs");
+tabRow.addEventListener("dragover", (e) => {
+  if (!e.dataTransfer.types.includes(TAB_MIME)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  showDropMarker(dropIndexAt(e.clientX).x);
+});
+tabRow.addEventListener("dragleave", (e) => { if (!tabRow.contains(e.relatedTarget)) hideDropMarker(); });
+tabRow.addEventListener("drop", async (e) => {
+  if (!e.dataTransfer.types.includes(TAB_MIME)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  hideDropMarker();
+  const { index } = dropIndexAt(e.clientX);
+  if (dragTab) { // same window: reorder
+    const from = tabs.indexOf(dragTab);
+    moveTab(dragTab, index > from ? index - 1 : index);
+    return;
+  }
+  // From another window: ask it (through the main process) to hand the tab over.
+  let src;
+  try { src = JSON.parse(e.dataTransfer.getData(TAB_MIME)); } catch { return; }
+  if (canWindows && src?.win != null) {
+    const payload = await window.folioNative.takeTab(src.win, src.tab);
+    if (payload) await openTransfer(payload, index);
+  }
+});
+// The whole window accepts a tab from another window (it lands at the end).
+document.addEventListener("dragover", (e) => {
+  if (!dragTab && e.dataTransfer?.types.includes(TAB_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
+});
+document.addEventListener("drop", async (e) => {
+  if (dragTab || !e.dataTransfer?.types.includes(TAB_MIME)) return;
+  e.preventDefault();
+  let src;
+  try { src = JSON.parse(e.dataTransfer.getData(TAB_MIME)); } catch { return; }
+  if (canWindows && src?.win != null) {
+    const payload = await window.folioNative.takeTab(src.win, src.tab);
+    if (payload) await openTransfer(payload);
+  }
+});
 
 /** Back to the start screen when the last document is closed. */
 function showWelcome() {
@@ -1038,6 +1240,8 @@ function showShortcuts() {
     ["Find any command", "Ctrl+K"],
     ["Open · Save · Print", "Ctrl+O · Ctrl+S · Ctrl+P"],
     ["Next / previous document", "Ctrl+Tab · Ctrl+Shift+Tab"],
+    ["Move document tab left / right", "Ctrl+Shift+PgUp · Ctrl+Shift+PgDn"],
+    ["Open a document in its own window", "Drag its tab out, or right-click the tab"],
     ["Go to document 1–9 · Close document", "Ctrl+1…9 · Ctrl+W"],
     ["Search", "Ctrl+F"],
     ["Go to page", "Ctrl+G"],
@@ -1075,6 +1279,13 @@ document.addEventListener("keydown", (e) => {
   if (mod && k === "k") { e.preventDefault(); showPalette(); return; }
   if (!state.doc) return;
   // Tabs: Ctrl+Tab / Ctrl+PgDn next, Ctrl+Shift+Tab / Ctrl+PgUp previous, Ctrl+1…9, Ctrl+W close.
+  // Ctrl+Shift+PgUp / PgDn move the current tab left / right.
+  if (mod && e.shiftKey && (e.key === "PageDown" || e.key === "PageUp")) {
+    e.preventDefault();
+    const i = tabs.indexOf(activeTab);
+    moveTab(activeTab, i + (e.key === "PageUp" ? -1 : 1));
+    return;
+  }
   if (mod && (e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp")) {
     e.preventDefault();
     cycleTab(e.key === "PageUp" || (e.key === "Tab" && e.shiftKey) ? -1 : 1);
@@ -1192,6 +1403,16 @@ if (platform.isDesktop) {
       if (!(await confirmDiscard())) return;
     }
     window.folioNative.confirmClose();
+  });
+  // A document moved here from another window (torn off, or sent with "Move to window").
+  window.folioNative.onTransfer?.((p) => openTransfer(p));
+  // Another window wants one of our tabs (it was dropped there): hand it over and let it go.
+  window.folioNative.onGiveTab?.((tabId) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab) return null;
+    const payload = tabPayload(tab);
+    setTimeout(() => releaseTab(tab));
+    return payload;
   });
   window.folioNative.ready?.();
 }
